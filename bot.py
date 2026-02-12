@@ -1,11 +1,9 @@
 import logging
 import asyncio
-import io
 import os
 import pandas as pd
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 
 # --- SOZLAMALAR ---
@@ -17,17 +15,16 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# --- RENDER UCHUN PORT ---
+# --- RENDER UCHUN WEB SERVER ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
 app = web.Application()
 app.router.add_get('/', handle)
 
-# --- NATIJANI TEKSHIRISH ---
+# --- JADVALDAN NATIJANI QIDIRISH ---
 def check_results(full_name):
     try:
-        # Keshni chetlab o'tish uchun vaqt qo'shish ixtiyoriy
         df = pd.read_csv(SHEET_URL)
         df.columns = df.columns.str.strip()
         user_res = df[df['Ism-familiya'].astype(str).str.contains(full_name, case=False, na=False)]
@@ -43,69 +40,69 @@ def check_results(full_name):
 async def send_welcome(message: types.Message):
     await message.answer(
         "Assalomu alaykum! 🎓\n\nSertifikat olish uchun testda qatnashgan **Ism-familiyangizni** yuboring. "
-        "Men natijangizni tekshirib, adminga xabar beraman."
+        "Adminga so'rov yuboriladi va tez orada sertifikatingizni olasiz."
     )
 
-# --- XABARLARNI QABUL QILISH ---
-@dp.message(F.text)
-async def handle_student_message(message: types.Message):
-    student_name = message.text.strip()
-    
-    # 1. O'quvchiga javob
-    wait_msg = await message.answer("🔍 Natijangiz tekshirilmoqda, iltimos kuting...")
-    
-    # 2. Jadvaldan qidirish
-    result = check_results(student_name)
-    
-    status_text = ""
-    if result is None:
-        status_text = "❌ Bu ism bazadan topilmadi (lekin xabaringiz adminga yuborildi)."
-    elif isinstance(result, str) and result == "error":
-        status_text = "⚠️ Tizimda vaqtinchalik uzilish (xabaringiz adminga yuborildi)."
-    else:
-        score = result["Ball (%)"]
-        subject = result["Fan"]
-        real_name = result["Ism-familiya"]
-        status_text = f"✅ Natijangiz topildi!\n👤 Ism: {real_name}\n📚 Fan: {subject}\n📊 Ball: {score}\n\n⏳ Adminga xabar yuborildi. Tez orada javob olasiz."
+# --- 1. ADMIN REPLY (Siz o'quvchiga javob yozganingizda) ---
+@dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
+async def admin_reply_handler(message: types.Message):
+    try:
+        # Reply qilingan xabardan o'quvchi ID-sini qidirib topish
+        orig_text = message.reply_to_message.text or message.reply_to_message.caption
+        if "🆔 Telegram ID:" in orig_text:
+            # ID ni qirqib olish
+            student_id = int(orig_text.split("🆔 Telegram ID: `")[1].split("`")[0])
+            
+            # O'quvchiga xabarni (rasm, fayl yoki matn) yuborish
+            await bot.copy_message(
+                chat_id=student_id,
+                from_chat_id=ADMIN_ID,
+                message_id=message.message_id
+            )
+            await message.answer("✅ Xabaringiz o'quvchiga yetkazildi!")
+        else:
+            await message.answer("❌ Xatolik: Bu xabarda o'quvchi ID-si topilmadi.")
+    except Exception as e:
+        logging.error(f"Reply xatosi: {e}")
+        await message.answer("⚠️ O'quvchiga yuborishda xatolik yuz berdi.")
 
-    await wait_msg.edit_text(status_text)
-
-    # 3. ADMINGA (SIZGA) XABAR YUBORISH
-    # O'quvchi test ishlagan bo'lsa natijasi bilan, ishlamagan bo'lsa shunchaki ismi bilan boradi
-    admin_info = (
-        f"📩 **Yangi murojaat!**\n\n"
-        f"👤 **O'quvchi yozdi:** {student_name}\n"
-        f"🆔 **ID:** `{message.from_user.id}`\n"
-        f"🔗 **Username:** @{message.from_user.username}\n"
+# --- 2. O'QUVCHI XABARI (O'quvchi ismini yozganda) ---
+@dp.message(F.text & (F.from_user.id != ADMIN_ID))
+async def handle_student(message: types.Message):
+    student_input = message.text.strip()
+    await message.answer("🔍 Natijangiz tekshirilmoqda va adminga yuborilmoqda. Iltimos, kutib turing...")
+    
+    result = check_results(student_input)
+    
+    admin_msg = (
+        f"🔔 **Yangi murojaat!**\n\n"
+        f"👤 **O'quvchi yozgan ism:** {student_input}\n"
+        f"🆔 Telegram ID: `{message.from_user.id}`\n"
+        f"🔗 Profil: @{message.from_user.username if message.from_user.username else 'yo`q'}\n"
     )
     
-    if not isinstance(result, str) and result is not None:
-        admin_info += (
-            f"\n📊 **Test natijasi:**\n"
+    if result is not None and not isinstance(result, str):
+        admin_msg += (
+            f"\n📊 **Natijasi:**\n"
             f"🔹 Ism: {result['Ism-familiya']}\n"
             f"🔹 Fan: {result['Fan']}\n"
-            f"🔹 Ball: {result['Ball (%)']}"
+            f"🔹 Ball: {result['Ball (%)']}\n\n"
+            f"👉 *Ushbu xabarga reply qilib sertifikatni yuboring.*"
         )
     else:
-        admin_info += "\n⚠️ *Bu foydalanuvchi bazadan topilmadi.*"
+        admin_msg += "\n⚠️ *Bu ism bazadan topilmadi.*"
 
-    # Adminga yuborish (Sertifikat bering deb yozish shartmas, avtomatik boradi)
-    await bot.send_message(ADMIN_ID, admin_info, parse_mode="Markdown")
+    await bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
 
-# --- ASOSIY ISHGA TUSHIRISH ---
+# --- ASOSIY LOOP ---
 async def main():
-    # Render portini band qilish
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     
-    logging.info(f"Bot ishga tushdi! Port: {port}")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot to'xtatildi")
+    asyncio.run(main())
