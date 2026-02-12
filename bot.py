@@ -43,17 +43,13 @@ async def send_welcome(message: types.Message):
         "Adminga so'rov yuboriladi va tez orada sertifikatingizni olasiz."
     )
 
-# --- 1. ADMIN REPLY (Siz o'quvchiga javob yozganingizda) ---
+# --- 1. ADMIN REPLY ---
 @dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
 async def admin_reply_handler(message: types.Message):
     try:
-        # Reply qilingan xabardan o'quvchi ID-sini qidirib topish
         orig_text = message.reply_to_message.text or message.reply_to_message.caption
-        if "🆔 Telegram ID:" in orig_text:
-            # ID ni qirqib olish
+        if orig_text and "🆔 Telegram ID:" in orig_text:
             student_id = int(orig_text.split("🆔 Telegram ID: `")[1].split("`")[0])
-            
-            # O'quvchiga xabarni (rasm, fayl yoki matn) yuborish
             await bot.copy_message(
                 chat_id=student_id,
                 from_chat_id=ADMIN_ID,
@@ -66,7 +62,7 @@ async def admin_reply_handler(message: types.Message):
         logging.error(f"Reply xatosi: {e}")
         await message.answer("⚠️ O'quvchiga yuborishda xatolik yuz berdi.")
 
-# --- 2. O'QUVCHI XABARI (O'quvchi ismini yozganda) ---
+# --- 2. O'QUVCHI XABARI ---
 @dp.message(F.text & (F.from_user.id != ADMIN_ID))
 async def handle_student(message: types.Message):
     student_input = message.text.strip()
@@ -94,14 +90,21 @@ async def handle_student(message: types.Message):
 
     await bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
 
-# --- ASOSIY LOOP ---
+# --- ASOSIY LOOP (TUG'IRLANGAN VARIANT) ---
 async def main():
+    # Render portini sozlash
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     
+    logging.info(f"🚀 Server {port}-portda ishga tushdi")
+    
+    # Webhookni o'chirish va eski xabarlarni tozalash
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    # Pollingni boshlash
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
