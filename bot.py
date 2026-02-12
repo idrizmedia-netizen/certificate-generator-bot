@@ -6,16 +6,13 @@ import pandas as pd
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from PIL import Image, ImageDraw, ImageFont
+from aiohttp import web  # Render port xatosi uchun
 
 # --- SOZLAMALAR ---
-# Xavfsizlik uchun Tokenni serverning Environment Variables qismiga qo'yish tavsiya etiladi
 API_TOKEN = '7627481814:AAHhAlr07yJQ7y9vWVY4VK5e5nfEI94Cd1M'
-ADMIN_ID = 529579637 
-
 # Google Sheets CSV eksport havolasi
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1s_Q6s_To2pI63gqqXWmGfkN_H2yIO42KIBA8G5b0B4U/gviz/tq?tqx=out:csv&sheet=Results"
 
-# Fayllar yo'lini aniqlash (GitHub/Serverda xato bermasligi uchun)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CERT_IMAGE = os.path.join(BASE_DIR, "Blue and Gold Classy Appreciation Certificate.jpg")
 FONT_FILE = os.path.join(BASE_DIR, "Montserrat-Italic-VariableFont_wght.ttf")
@@ -23,6 +20,13 @@ FONT_FILE = os.path.join(BASE_DIR, "Montserrat-Italic-VariableFont_wght.ttf")
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
+
+# --- RENDER PORT UCHUN ---
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+app = web.Application()
+app.router.add_get('/', handle)
 
 def create_cert(name, subject, score):
     try:
@@ -33,12 +37,10 @@ def create_cert(name, subject, score):
             font_name = ImageFont.truetype(FONT_FILE, 55)
             font_info = ImageFont.truetype(FONT_FILE, 30)
         except:
-            logging.warning("Shrift yuklanmadi, standart ishlatiladi")
             font_name = ImageFont.load_default()
             font_info = ImageFont.load_default()
 
         text_color = "#1a3a5a"
-        # Koordinatalar (Rasm o'lchamiga qarab biroz o'zgarishi mumkin)
         draw.text((1020, 480), f"{name}", fill=text_color, font=font_name, anchor="ms")
         draw.text((430, 605), f"{subject}", fill=text_color, font=font_info, anchor="ls")
         draw.text((600, 635), f"{score}%", fill=text_color, font=font_info, anchor="ls")
@@ -53,11 +55,14 @@ def create_cert(name, subject, score):
 
 def check_results(full_name):
     try:
+        # Keshni yangilab turish uchun URL ga o'zgartirish kiritamiz
         df = pd.read_csv(SHEET_URL)
         df.columns = df.columns.str.strip()
-        # Ism-familiya ustunidan qidirish
         user_res = df[df['Ism-familiya'].astype(str).str.contains(full_name, case=False, na=False)]
-        return user_res.iloc[-1] if not user_res.empty else None
+        
+        if user_res.empty:
+            return None
+        return user_res.iloc[-1]
     except Exception as e:
         logging.error(f"Jadval xatosi: {e}")
         return "error"
@@ -73,11 +78,14 @@ async def handle_message(message: types.Message):
     
     result = check_results(name_query)
     
-    if result == "error":
+    # MUHIM: Pandas Series-ni string bilan to'g'ri solishtirish
+    if isinstance(result, str) and result == "error":
         await msg.edit_text("⚠️ Bazaga ulanib bo'lmadi. Jadval ruxsatini tekshiring.")
     elif result is not None:
         try:
-            score = float(str(result["Ball (%)"]).replace('%', '').strip())
+            score_val = result["Ball (%)"]
+            score = float(str(score_val).replace('%', '').strip())
+            
             if score >= 80:
                 await msg.edit_text("✅ Natija topildi! Sertifikat tayyorlanmoqda...")
                 cert = create_cert(result["Ism-familiya"], result["Fan"], score)
@@ -87,12 +95,20 @@ async def handle_message(message: types.Message):
             else:
                 await msg.edit_text(f"😕 Ballingiz: {score}%. Sertifikat uchun kamida 80% kerak.")
         except Exception as e:
+            logging.error(f"Xatolik: {e}")
             await msg.edit_text("❌ Ma'lumotni o'qishda xatolik.")
     else:
         await msg.edit_text("❌ Ismingiz bazadan topilmadi.")
 
 async def main():
-    print("Bot ishga tushdi...")
+    # Render-da portni band qilish (Timeout xatosini oldini oladi)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    print(f"Bot ishga tushdi... Port: {port}")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
