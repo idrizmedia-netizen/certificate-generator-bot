@@ -1,3 +1,5 @@
 aiogram
 pandas
-Pillow
+pillow
+requests
+aiohttp
