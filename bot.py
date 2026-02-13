@@ -8,8 +8,7 @@ from aiohttp import web
 
 # --- SOZLAMALAR ---
 API_TOKEN = '7627481814:AAHhAlr07yJQ7y9vWVY4VK5e5nfEI94Cd1M'
-ADMIN_ID = 529579637  # Sizning ID-ingiz
-# Google Sheets URL (Keshni chetlab o'tish uchun vaqt belgisi qo'shiladi)
+ADMIN_ID = 529579637
 BASE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1s_Q6s_To2pI63gqqXWmGfkN_H2yIO42KIBA8G5b0B4U/gviz/tq?tqx=out:csv&sheet=Results"
 
 logging.basicConfig(level=logging.INFO)
@@ -26,18 +25,15 @@ app.router.add_get('/', handle)
 # --- JADVALDAN NATIJANI QIDIRISH ---
 def check_results(full_name):
     try:
-        # Har safar yangi ma'lumot olish uchun URL oxiriga tasodifiy son qo'shamiz
         current_url = f"{BASE_SHEET_URL}&cache={pd.Timestamp.now().timestamp()}"
         df = pd.read_csv(current_url)
-        
-        # Ustun nomlaridagi bo'shliqlarni tozalash
         df.columns = df.columns.str.strip()
         
-        # Qidiruv (ismni kichik harflarda solishtirish)
+        # To'liq moslikni tekshirish
         user_res = df[df['Ism-familiya'].astype(str).str.strip().str.lower() == full_name.strip().lower()]
         
         if user_res.empty:
-            # Agar to'liq mos kelmasa, qisman qidirish
+            # Qisman qidirish
             user_res = df[df['Ism-familiya'].astype(str).str.contains(full_name, case=False, na=False)]
             
         if user_res.empty:
@@ -52,74 +48,68 @@ def check_results(full_name):
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message):
     await message.answer(
-        "Assalomu alaykum! 🎓\n\nSertifikat olish uchun testda qatnashgan **Ism-familiyangizni** yuboring.\n"
-        "Men natijangizni tekshirib, adminga so'rov yuboraman."
+        "Assalomu alaykum! 🎓\n\nSertifikat olish uchun testda qatnashgan **Ism-familiyangizni** yuboring."
     )
 
-# --- 1. ADMIN REPLY (Sertifikatni o'quvchiga qaytarish) ---
+# --- 1. ADMIN REPLY (Sertifikat yuborish) ---
+# Faqat Admin reply qilganda ishlaydi
 @dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
 async def admin_reply_handler(message: types.Message):
     try:
         orig_text = message.reply_to_message.text or message.reply_to_message.caption
         if orig_text and "🆔 Telegram ID:" in orig_text:
-            # ID ni xabardan ajratib olish
             student_id = int(orig_text.split("🆔 Telegram ID: `")[1].split("`")[0])
-            
-            # Admindan kelgan xabarni o'quvchiga nusxalash
             await bot.copy_message(
                 chat_id=student_id,
                 from_chat_id=ADMIN_ID,
                 message_id=message.message_id
             )
-            await message.answer("✅ Xabar o'quvchiga muvaffaqiyatli yuborildi!")
+            await message.answer("✅ Sertifikat o'quvchiga yuborildi!")
         else:
-            await message.answer("❌ Bu xabarda foydalanuvchi ID-si topilmadi.")
+            await message.answer("❌ Bu xabarda ID topilmadi. Ism yozgan bo'lsangiz, natijani qidirish uchun reply qilmasdan yozing.")
     except Exception as e:
-        logging.error(f"Sertifikat yuborishda xato: {e}")
+        logging.error(f"Xato: {e}")
         await message.answer(f"⚠️ Xatolik: {e}")
 
-# --- 2. O'QUVCHI XABARI ---
-@dp.message(F.text & (F.from_user.id != ADMIN_ID))
-async def handle_student(message: types.Message):
+# --- 2. NATIJA QIDIRISH (Hamma uchun, shu jumladan Admin uchun ham) ---
+# Faqat reply bo'lmagan oddiy matnli xabarlarni qabul qiladi
+@dp.message(F.text & ~F.reply_to_message)
+async def handle_all_messages(message: types.Message):
     student_input = message.text.strip()
-    wait_msg = await message.answer("🔍 Natijangiz tekshirilmoqda, iltimos kuting...")
+    wait_msg = await message.answer("🔍 Natija tekshirilmoqda...")
     
     result = check_results(student_input)
     
     if result == "error":
-        await wait_msg.edit_text("❌ Tizimda texnik xatolik yuz berdi. Birozdan so'ng urinib ko'ring.")
+        await wait_msg.edit_text("❌ Jadval o'qishda xato yuz berdi.")
         return
 
-    admin_msg = (
-        f"🔔 **Yangi murojaat!**\n\n"
-        f"👤 **O'quvchi yozgan ism:** {student_input}\n"
+    # Admin xabari tayyorlanmoqda
+    admin_info = (
+        f"🔔 **Yangi murojaat!**\n"
+        f"👤 **Ism:** {student_input}\n"
         f"🆔 Telegram ID: `{message.from_user.id}`\n"
-        f"🔗 Profil: @{message.from_user.username if message.from_user.username else 'yo`q'}\n"
     )
     
     if result is not None:
-        # Jadvalingizdagi ustun nomlariga mos ravishda ma'lumot olish
-        admin_msg += (
+        found_info = (
             f"\n📊 **Natija topildi:**\n"
             f"🔹 Ism: {result.get('Ism-familiya', 'Noma`lum')}\n"
             f"🔹 Fan: {result.get('Fan', 'Noma`lum')}\n"
-            f"🔹 Ball: {result.get('Ball (%)', '0%')}\n\n"
-            f"👉 *Ushbu xabarga 'reply' qilib sertifikatni yuboring.*"
+            f"🔹 Ball: {result.get('Ball (%)', '0%')}\n"
         )
-        await wait_msg.edit_text("✅ Natijangiz topildi va adminga yuborildi. Sertifikat tayyor bo'lishini kuting.")
+        await wait_msg.edit_text(f"✅ Natija topildi!{found_info}")
+        
+        # Agar yozgan odam Admin bo'lmasa, Adminga hisobot yuboramiz
+        if message.from_user.id != ADMIN_ID:
+            await bot.send_message(ADMIN_ID, admin_info + found_info + "\n👉 Sertifikat yuborish uchun reply qiling.", parse_mode="Markdown")
     else:
-        admin_msg += "\n⚠️ *Bu ism bazadan topilmadi.*"
-        await wait_msg.edit_text("⚠️ Ismingiz bazadan topilmadi. Ism-familiyani to'g'ri yozganingizni tekshiring.")
-
-    # Adminga xabarni yetkazish
-    try:
-        await bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Adminga xabar yuborishda xato: {e}")
+        await wait_msg.edit_text("⚠️ Bazadan topilmadi. Ismni to'g'ri yozganingizga ishonch hosil qiling.")
+        if message.from_user.id != ADMIN_ID:
+            await bot.send_message(ADMIN_ID, admin_info + "\n⚠️ Bu ism bazada yo'q.", parse_mode="Markdown")
 
 # --- ASOSIY LOOP ---
 async def main():
-    # Web serverni ishga tushirish (Render uchun)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
@@ -127,8 +117,6 @@ async def main():
     await site.start()
     
     logging.info(f"🚀 Bot ishga tushdi! Port: {port}")
-    
-    # Eski xabarlarni tozalash va pollingni boshlash
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
